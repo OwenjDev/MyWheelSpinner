@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Spin the Wheel</title>
+  <style>
+    body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; transition: background 0.3s, color 0.3s; }
+    body.dark { background: #111; color: #eee; }
+    canvas { margin: 10px; background: white; border-radius: 50%; }
+    button, input, select, textarea { margin: 5px; padding: 5px; }
+    #controls { max-width: 500px; display: flex; flex-direction: column; align-items: center; }
+    table { border-collapse: collapse; margin-top: 10px; }
+    td, th { border: 1px solid #ccc; padding: 5px; }
+    input.inline { width: 70px; }
+    textarea { width: 100%; height: 100px; }
+  </style>
+</head>
+<body>
+  <h1 id="wheelTitle">Spin the Wheel</h1>
+  <button onclick="toggleDarkMode()">🌙 Toggle Dark Mode</button>
+
+  <!-- Wheel + Arrow -->
+  <div id="wheelContainer" style="position: relative; display: inline-block; margin-top: 20px;">
+    <div style="position: absolute; top: -40px; left: 50%; transform: translateX(-50%);
+                width: 0; height: 0; 
+                border-left: 20px solid transparent; border-right: 20px solid transparent; 
+                border-bottom: 30px solid black;"></div>
+    <canvas id="wheel" width="400" height="400"></canvas>
+  </div>
+  <button onclick="spin()">Spin!</button>
+
+  <!-- Save/Load Section -->
+  <details>
+    <summary>💾 Save & Load Wheels</summary>
+    <div id="saveLoadControls">
+      Name: <input id="wheelName" type="text" />
+      <button onclick="saveWheel()">Save</button>
+      <button onclick="listWheels()">List Saved</button>
+      <br><br>
+      <input id="wheelSearch" type="text" placeholder="🔍 Search wheels..." onkeyup="filterWheels()" />
+      <br>
+      <select id="wheelSelect" size="8" style="width:200px;"></select>
+      <br>
+      <button onclick="loadWheelFromDropdown()">Load Selected</button>
+      <button onclick="deleteWheel()">Delete Selected</button>
+    </div>
+  </details>
+
+  <!-- Editing Section -->
+  <details open>
+    <summary>⚙️ Edit Wheel Options</summary>
+    <div id="controls">
+      <h3>Add Single Option</h3>
+      Label: <input id="label" type="text" />
+      Size (visual slice): <input id="size" type="number" value="1" />
+      Weight (odds): <input id="weight" type="number" value="1" />
+      Color: <input id="color" type="color" value="#f54242" />
+      <button onclick="addOption()">Add Option</button>
+
+      <h3>Add Multiple Options</h3>
+      <p>Paste one option per line. All will default to size=5, weight=5, and random colors.</p>
+      <textarea id="bulkOptions"></textarea><br>
+      <button onclick="addMultipleOptions()">Add Multiple Options</button>
+
+      <h3>Options</h3>
+      <table id="optionsTable">
+        <tr><th>Label</th><th>Size</th><th>Weight</th><th>Color</th><th>Remove</th></tr>
+      </table>
+    </div>
+  </details>
+
+  <script>
+    let options = [];
+    let currentWheelName = "Untitled";
+    const canvas = document.getElementById("wheel");
+    const ctx = canvas.getContext("2d");
+    const radius = canvas.width / 2;
+
+    // ✅ Random bright color generator
+    function randomColor() {
+      const r = Math.floor(Math.random() * 156) + 100; // 100–255
+      const g = Math.floor(Math.random() * 156) + 100;
+      const b = Math.floor(Math.random() * 156) + 100;
+      return "rgb(" + r + "," + g + "," + b + ")";
+    }
+
+    // Bulk add options
+    function addMultipleOptions() {
+      const text = document.getElementById("bulkOptions").value.trim();
+      if (!text) return;
+      const lines = text.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+      lines.forEach(line => {
+        options.push({ label: line, size: 5, weight: 5, color: randomColor() });
+      });
+      document.getElementById("bulkOptions").value = "";
+      updateTable();
+      drawWheelToCache(); renderWheel();
+    }
+
+    function deleteWheel() {
+      const select = document.getElementById("wheelSelect");
+      const name = select.value;
+      if (!name) { alert("No wheel selected!"); return; }
+      if (!confirm("Delete wheel '" + name + "'?")) return;
+      localStorage.removeItem("wheel_" + name);
+      listWheels();
+      alert("Deleted wheel: " + name);
+    }
+
+    // Offscreen canvas for caching
+    const offCanvas = document.createElement("canvas");
+    offCanvas.width = canvas.width;
+    offCanvas.height = canvas.height;
+    const offCtx = offCanvas.getContext("2d");
+
+    function drawWheelToCache(){
+      offCtx.clearRect(0,0,offCanvas.width,offCanvas.height);
+      if (options.length === 0) return;
+      const totalSize = options.reduce((s,o)=>s+o.size,0);
+      let startAngle = 0;
+      options.forEach(o=>{
+        const sliceAngle = (o.size/totalSize)*2*Math.PI;
+        offCtx.beginPath();
+        offCtx.moveTo(radius,radius);
+        offCtx.arc(radius,radius,radius,startAngle,startAngle+sliceAngle);
+        offCtx.fillStyle = o.color;
+        offCtx.fill();
+        offCtx.stroke();
+
+        // Draw text
+        offCtx.save();
+        offCtx.translate(radius,radius);
+        offCtx.rotate(startAngle+sliceAngle/2);
+        const textRadius = radius*0.7;
+        offCtx.fillStyle="black";
+        offCtx.textAlign="center";
+        let fontSize = Math.min(18, sliceAngle*radius/2);
+        if (fontSize < 10) fontSize = 10;
+        offCtx.font = `${fontSize}px sans-serif`;
+        let text = o.label;
+        if (sliceAngle < 0.15) text = text[0] || "";
+        offCtx.fillText(text, textRadius, 5);
+        offCtx.restore();
+        startAngle+=sliceAngle;
+      });
+    }
+
+    function renderWheel(rotation=0){
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      ctx.save();
+      ctx.translate(radius,radius);
+      ctx.rotate(rotation*Math.PI/180);
+      ctx.translate(-radius,-radius);
+      ctx.drawImage(offCanvas,0,0);
+      ctx.restore();
+    }
+
+    function pickWinnerByWeight(){
+      const totalWeight=options.reduce((s,o)=>s+o.weight,0);
+      let r=Math.random()*totalWeight;
+      for(let o of options){
+        if(r<o.weight){ return o; }
+        r-=o.weight;
+      }
+    }
+
+    let spinning=false;
+    function spin(){
+      if(spinning||options.length===0)return;
+      spinning=true;
+      const winner=pickWinnerByWeight();
+
+      // Find slice midpoint
+      const totalSize=options.reduce((s,o)=>s+o.size,0);
+      let start=0, end=0, sliceMid=0;
+      for(let o of options){
+        const slice=o.size/totalSize*360;
+        end=start+slice;
+        if(o===winner){ sliceMid=(start+end)/2; break; }
+        start=end;
+      }
+
+      const offset=270;
+      let finalAngle=(360-sliceMid+offset)%360;
+      finalAngle+=2160;
+      const spinTime=3000;
+      const startAngle=0;
+      const startTime=performance.now();
+      let lastTickAngle=0;
+
+      function animate(now){
+        const t=(now-startTime)/spinTime;
+        const progress=Math.min(t,1);
+        const ease=1-Math.pow(1-progress,3);
+        const currentAngle=startAngle+(finalAngle-startAngle)*ease;
+        renderWheel(currentAngle);
+        const sliceDeg=360/totalSize;
+        if(Math.floor(currentAngle/sliceDeg)!==Math.floor(lastTickAngle/sliceDeg)){
+          tickSound();
+        }
+        lastTickAngle=currentAngle;
+        if(progress<1){requestAnimationFrame(animate);}
+        else {spinning=false;alert("Winner: "+winner.label);}
+      }
+      requestAnimationFrame(animate);
+    }
+
+    function tickSound(){
+      const audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+      const osc=audioCtx.createOscillator();
+      const gain=audioCtx.createGain();
+      osc.type="square";
+      osc.frequency.setValueAtTime(1000,audioCtx.currentTime);
+      gain.gain.setValueAtTime(0.1,audioCtx.currentTime);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime+0.05);
+    }
+
+    // Option editing
+    function addOption(){
+      const label=document.getElementById("label").value||"Option";
+      const size=parseFloat(document.getElementById("size").value)||1;
+      const weight=parseFloat(document.getElementById("weight").value)||1;
+      const color=document.getElementById("color").value;
+      options.push({label,size,weight,color});
+      updateTable();
+      drawWheelToCache(); renderWheel();
+    }
+
+    function updateTable(){
+      const table=document.getElementById("optionsTable");
+      table.innerHTML="<tr><th>Label</th><th>Size</th><th>Weight</th><th>Color</th><th>Remove</th></tr>";
+      options.forEach((o,i)=>{
+        table.innerHTML+=`<tr>
+          <td><input class="inline" value="${o.label}" onchange="editOption(${i}, 'label', this.value)" /></td>
+          <td><input class="inline" type="number" value="${o.size}" onchange="editOption(${i}, 'size', this.value)" /></td>
+          <td><input class="inline" type="number" value="${o.weight}" onchange="editOption(${i}, 'weight', this.value)" /></td>
+          <td><input class="inline" type="color" value="${o.color}" onchange="editOption(${i}, 'color', this.value)" /></td>
+          <td><button onclick="removeOption(${i})">X</button></td>
+        </tr>`;
+      });
+    }
+
+    function editOption(index, field, value){
+      if(field==="size"||field==="weight"){ value=parseFloat(value)||1; }
+      options[index][field]=value;
+      drawWheelToCache(); renderWheel();
+    }
+
+    function removeOption(i){
+      options.splice(i,1);
+      updateTable();
+      drawWheelToCache(); renderWheel();
+    }
+
+    // Save/Load
+    function saveWheel(){
+      const name=document.getElementById("wheelName").value.trim();
+      if(!name){alert("Enter a name!");return;}
+      localStorage.setItem("wheel_"+name,JSON.stringify(options));
+      currentWheelName=name;
+      updateWheelTitle();
+      listWheels();
+      document.getElementById("wheelSelect").value = name; // highlight latest saved
+      alert("Saved as "+name);
+    }
+
+    function listWheels(){
+      const select=document.getElementById("wheelSelect");
+      select.innerHTML="";
+      let wheels=[];
+      for(let i=0;i<localStorage.length;i++){
+        const key=localStorage.key(i);
+        if(key.startsWith("wheel_")){
+          wheels.push(key.replace("wheel_",""));
+        }
+      }
+      wheels.sort(); // alphabetize
+      wheels.forEach(name=>{
+        const opt=document.createElement("option");
+        opt.value=name;
+        opt.textContent=name;
+        select.appendChild(opt);
+      });
+    }
+
+    function filterWheels(){
+      const filter = document.getElementById("wheelSearch").value.toLowerCase();
+      const select = document.getElementById("wheelSelect");
+      for (let option of select.options) {
+        option.style.display = option.value.toLowerCase().includes(filter) ? "" : "none";
+      }
+    }
+
+    function loadWheelFromDropdown(){
+      const select=document.getElementById("wheelSelect");
+      const name=select.value;
+      const data=localStorage.getItem("wheel_"+name);
+      if(!data){alert("Not found");return;}
+      options=JSON.parse(data);
+      currentWheelName=name;
+      updateWheelTitle();
+      updateTable();
+      drawWheelToCache(); renderWheel();
+    }
+
+    // Dark mode
+    function toggleDarkMode(){ document.body.classList.toggle("dark"); }
+
+    // Dynamic Title
+    function updateWheelTitle(){
+      document.getElementById("wheelTitle").textContent="Spin the Wheel: "+currentWheelName;
+    }
+
+    drawWheelToCache(); renderWheel();
+  </script>
+</body>
+</html>
